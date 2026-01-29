@@ -24,40 +24,100 @@ def line_push(channel_access_token: str, to_id: str, message: str) -> None:
         raise RuntimeError(f"LINE push failed: {r.status_code} {r.text}")
 
 
-def meta_insights_multi(object_id: str, token: str, metrics: list[str], since: str, until: str) -> list[int | None]:
-    """
-    回傳與 metrics 對齊的 list，抓不到就 None
-    period=day, since/until 設成同一天代表「那一天」
-    """
-    url = f"https://graph.facebook.com/v19.0/{object_id}/insights"
-    params = {
-        "metric": ",".join(metrics),
-        "period": "day",
-        "since": since,
-        "until": until,
-        "access_token": token,
-    }
-    r = requests.get(url, params=params, timeout=30)
-    if r.status_code != 200:
-        print("[Meta] error:", r.status_code, r.text)
-        return [None] * len(metrics)
+# ====== 你提供的新版 FB/IG 抓取邏輯（改成可用 env 參數） ======
 
-    data = r.json().get("data", [])
-    # 轉成按 metric name 查值（不用 dict 也行：用兩層迴圈對齊）
-    out: list[int | None] = []
-    for m in metrics:
-        found = None
+def get_fb_stable_stats(page_id: str, token: str) -> tuple[int | None, int | None]:
+    """
+    針對新版粉專優化的穩定抓取法：
+    - 先換 Page Access Token
+    - 再抓總追蹤/粉絲數
+    - 再抓最新 5 篇貼文互動（reactions + comments）
+    回傳：(total_fans, interaction_sum)，抓不到回 None
+    """
+    try:
+        # 1) 換取 Page Access Token
+        auth_url = f"https://graph.facebook.com/v19.0/{page_id}"
+        auth_res = requests.get(
+            auth_url,
+            params={"fields": "access_token", "access_token": token},
+            timeout=30,
+        ).json()
+        page_token = auth_res.get("access_token") or token
+
+        # 2) 粉專基礎資料（總粉絲/追蹤）
+        page_url = f"https://graph.facebook.com/v19.0/{page_id}"
+        p_res = requests.get(
+            page_url,
+            params={"fields": "fan_count,followers_count", "access_token": page_token},
+            timeout=30,
+        ).json()
+        total_fans_v = p_res.get("followers_count") or p_res.get("fan_count")
+        total_fans = int(total_fans_v) if isinstance(total_fans_v, (int, float)) else None
+
+        # 3) 最新 5 篇互動數（按讚+留言）
+        feed_url = f"https://graph.facebook.com/v19.0/{page_id}/posts"
+        f_params = {
+            "fields": "reactions.summary(total_count),comments.summary(total_count)",
+            "limit": 5,
+            "access_token": page_token,
+        }
+        f_res = requests.get(feed_url, params=f_params, timeout=30).json()
+
+        interaction_sum = 0
+        has_any = False
+        for post in f_res.get("data", []) or []:
+            r_count = post.get("reactions", {}).get("summary", {}).get("total_count", 0) or 0
+            c_count = post.get("comments", {}).get("summary", {}).get("total_count", 0) or 0
+            interaction_sum += int(r_count) + int(c_count)
+            has_any = True
+
+        interactions = interaction_sum if has_any else 0
+        return total_fans, interactions
+
+    except Exception as _:
+        return None, None
+
+
+def get_ig_insights(ig_id: str, token: str, since: str, until: str) -> tuple[int | None, int | None]:
+    """
+    抓取 IG（昨天）reach/impressions。
+    你的 since/until 會是同一天（昨天），就沿用你的主流程日期。
+    回傳：(reach, impressions)，抓不到回 None
+    """
+    if not ig_id:
+        return None, None
+
+    try:
+        url = f"https://graph.facebook.com/v19.0/{ig_id}/insights"
+        params = {
+            "metric": "reach,impressions",
+            "period": "day",
+            "since": since,
+            "until": until,
+            "access_token": token,
+        }
+        r = requests.get(url, params=params, timeout=30).json()
+        data = r.get("data", []) or []
+
+        reach = impr = None
         for item in data:
-            if item.get("name") == m:
-                values = item.get("values", [])
-                if values:
-                    v = values[0].get("value")
-                    if isinstance(v, (int, float)):
-                        found = int(v)
-                break
-        out.append(found)
-    return out
+            name = item.get("name")
+            values = item.get("values", []) or []
+            if not values:
+                continue
+            v = values[0].get("value")
+            if name == "reach" and isinstance(v, (int, float)):
+                reach = int(v)
+            if name == "impressions" and isinstance(v, (int, float)):
+                impr = int(v)
 
+        return reach, impr
+
+    except Exception as _:
+        return None, None
+
+
+# ====== GA4（原封不動） ======
 
 def ga4_yesterday(property_id: str, credentials_json: str, since: str, until: str):
     cred_path = "/tmp/ga4_sa.json"
@@ -112,47 +172,38 @@ def main():
     since = ymd(yday)
     until = ymd(yday)
 
-    # FB：用 page_impressions_unique 當「reach(近似唯一觸及)」，page_impressions 當「impressions」
-    fb_reach = fb_impr = None
+    # ====== FB（新版：總追蹤 + 近五篇互動） ======
+    fb_fans = fb_interact = None
     if meta_token and fb_page_id:
-        fb_reach, fb_impr = meta_insights_multi(
-            fb_page_id,
-            meta_token,
-            metrics=["page_impressions_unique", "page_impressions"],
-            since=since,
-            until=until,
-        )
+        fb_fans, fb_interact = get_fb_stable_stats(fb_page_id, meta_token)
 
-    # IG：reach + impressions
+    # ====== IG（新版：昨日 reach + impressions） ======
     ig_reach = ig_impr = None
     if meta_token and ig_user_id:
-        ig_reach, ig_impr = meta_insights_multi(
-            ig_user_id,
-            meta_token,
-            metrics=["reach", "impressions"],
-            since=since,
-            until=until,
-        )
+        ig_reach, ig_impr = get_ig_insights(ig_user_id, meta_token, since, until)
 
-    # GA4：activeUsers + totalUsers + screenPageViews
+    # ====== GA4（原本：activeUsers + totalUsers + screenPageViews） ======
     ga_active = ga_total = ga_views = None
     if ga4_property_id and ga4_credentials_json:
-        ga_active, ga_total, ga_views = ga4_yesterday(ga4_property_id, ga4_credentials_json, since, until)
+        ga_active, ga_total, ga_views = ga4_yesterday(
+            ga4_property_id, ga4_credentials_json, since, until
+        )
 
     msg = (
-        f" 24 小時匯總（以昨天為單位）\n"
+        f"📊 24 小時匯總（以昨天為單位）\n"
         f"日期：{since}\n\n"
-        f"FB\n"
-        f"- Reach(唯一)：{fmt(fb_reach)}\n"
-        f"- Impressions：{fmt(fb_impr)}\n\n"
-        f"IG\n"
-        f"- Reach：{fmt(ig_reach)}\n"
-        f"- Impressions：{fmt(ig_impr)}\n\n"
+        f"Facebook\n"
+        f"- 總追蹤人數：{fmt(fb_fans)}\n"
+        f"- 近五篇貼文互動：{fmt(fb_interact)}\n\n"
+        f"Instagram\n"
+        f"- 昨日觸及：{fmt(ig_reach)}\n"
+        f"- 昨日曝光：{fmt(ig_impr)}\n\n"
         f"官網（GA4）\n"
-        f"- activeUsers：{fmt(ga_active)}\n"
-        f"- totalUsers：{fmt(ga_total)}\n"
-        f"- pageViews：{fmt(ga_views)}"
+        f"- 活躍使用者：{fmt(ga_active)}\n"
+        f"- 使用者總數：{fmt(ga_total)}\n"
+        f"- 頁面瀏覽次數：{fmt(ga_views)}"
     )
+
     line_push(line_token, line_to, msg)
 
 
