@@ -140,7 +140,7 @@ def main():
         ga_active, ga_total, ga_views = ga4_yesterday(ga4_property_id, ga4_credentials_json, since, until)
 
     msg = (
-        f"📊 24 小時匯總（以昨天為單位）\n"
+        f" 24 小時匯總（以昨天為單位）\n"
         f"日期：{since}\n\n"
         f"FB\n"
         f"- Reach(唯一)：{fmt(fb_reach)}\n"
