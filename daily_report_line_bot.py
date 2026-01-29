@@ -153,7 +153,6 @@ def main():
         f"- totalUsers：{fmt(ga_total)}\n"
         f"- pageViews：{fmt(ga_views)}"
     )
-    msg = "test line message."
     line_push(line_token, line_to, msg)
 
 
