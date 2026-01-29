@@ -33,4 +33,4 @@ jobs:
           GA4_PROPERTY_ID: ${{ secrets.GA4_PROPERTY_ID }}
           GA4_CREDENTIALS_JSON: ${{ secrets.GA4_CREDENTIALS_JSON }}
         run: |
-          python daily_report_line_bot.py
+          python daily_repot_line_bot.py
