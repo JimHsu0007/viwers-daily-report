@@ -2,7 +2,7 @@ name: Daily LINE Summary
 
 on:
   schedule:
-    - cron: '* 1 * * *'   # 01:05 UTC = 09:05 Asia/Taipei
+    - cron: '5 1 * * *'   # 01:05 UTC = 09:05 Asia/Taipei
   workflow_dispatch:      # 允許你手動點 Run
 
 jobs:
