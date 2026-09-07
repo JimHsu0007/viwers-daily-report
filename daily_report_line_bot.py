@@ -151,8 +151,11 @@ def main():
     day_before = ymd(today_tw - timedelta(days=2))
 
     previous_snapshot = load_snapshot()
-    previous_fb = previous_snapshot.get("fb_followers")
-    previous_ig = previous_snapshot.get("ig_followers")
+    if previous_snapshot.get("date") == day_before:
+        previous_fb = previous_snapshot.get("fb_followers")
+        previous_ig = previous_snapshot.get("ig_followers")
+    else:
+        previous_fb = previous_ig = None
 
     fb_followers = ig_followers = None
     ig_username = None
